@@ -2,15 +2,14 @@ import os
 import logging
 import asyncio
 import uuid
+from aiohttp import web
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 import yt_dlp
 
-# Tokenni koddan emas, serverning maxfiy muhit o'zgaruvchisidan (Environment Variable) olamiz
 TOKEN = os.getenv("BOT_TOKEN")
-
 if not TOKEN:
-    raise ValueError("DIQQAT: BOT_TOKEN topilmadi! Server sozlamalaridan tokenni kiriting.")
+    raise ValueError("DIQQAT: BOT_TOKEN topilmadi!")
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TOKEN)
@@ -41,7 +40,9 @@ async def download_video(message: types.Message):
     ydl_opts = {
         'format': 'best',
         'outtmpl': f'{DOWNLOAD_DIR}/{file_id}.%(ext)s',
-        'noplaylist': True,
+        'noplaylist': `True`,
+        # YouTube bot sifatida aniqlab qolmasligi uchun qo'shimcha user-agent sozlamalari
+        'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
     }
     
     file_path = None
@@ -55,17 +56,26 @@ async def download_video(message: types.Message):
         file_path = await loop.run_in_executor(None, download)
 
         if file_path and os.path.exists(file_path):
-            await message.answer_chat_action("upload_video")
+            # Xatolik to'g'irlandi: bot orqali chat action yuboriladi
+            await bot.send_chat_action(chat_id=message.chat.id, action="upload_video")
+            
             video_file = types.FSInputFile(file_path)
             await message.answer_video(video=video_file, caption="✅ Marhamat!")
-            await bot.delete_message(chat_id=message.chat.id, message_id=processing_msg.message_id)
+            
+            try:
+                await bot.delete_message(chat_id=message.chat.id, message_id=processing_msg.message_id)
+            except:
+                pass
         else:
             await message.answer("❌ Videoni yuklab olishda xatolik yuz berdi.")
-            await bot.delete_message(chat_id=message.chat.id, message_id=processing_msg.message_id)
+            try:
+                await bot.delete_message(chat_id=message.chat.id, message_id=processing_msg.message_id)
+            except:
+                pass
             
     except Exception as e:
         logging.error(f"Xatolik: {e}")
-        await message.answer("❌ Kechirasiz, bu havoladan videoni yuklab bo'lmadi.")
+        await message.answer("❌ Kechirasiz, bu havoladan videoni yuklab bo'lmadi (YouTube himoyasi yoki yaroqsiz havola).")
         try:
             await bot.delete_message(chat_id=message.chat.id, message_id=processing_msg.message_id)
         except:
@@ -78,8 +88,25 @@ async def download_video(message: types.Message):
             except:
                 pass
 
+# --- RENDER WEB SERVICE UCHUN PORT OCHISH (No open ports xatosini yo'qotish uchun) ---
+async def handle(request):
+    return web.Response(text="Bot ishlayapti!")
+
+async def web_server():
+    app = web.Application()
+    app.router.add_get("/", handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+
 async def main():
-    await dp.start_polling(bot)
+    # Veb server va Telegram botni bir vaqtda ishga tushiramiz
+    await asyncio.gather(
+        web_server(),
+        dp.start_polling(bot)
+    )
 
 if __name__ == "__main__":
     asyncio.run(main())
